@@ -1,0 +1,12 @@
+command: ["streamlit", "run", "app.py"]
+
+env:
+  # Resolves to your Lakebase project/branch/endpoint path automatically,
+  # since your database resource's key is "database".
+  - name: LAKEBASE_ENDPOINT_NAME
+    valueFrom: database
+
+  # Resolves to your SQL Warehouse's ID automatically, since its resource
+  # key is "sql-warehouse". app.py builds the full HTTP path from this.
+  - name: DATABRICKS_WAREHOUSE_ID
+    valueFrom: sql-warehouse
