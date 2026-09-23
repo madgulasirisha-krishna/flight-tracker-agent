@@ -10,3 +10,11 @@ env:
   # key is "sql-warehouse". app.py builds the full HTTP path from this.
   - name: DATABRICKS_WAREHOUSE_ID
     valueFrom: sql-warehouse
+
+  # Catalog/schema the two managed MCP servers (UC Functions, AI Search)
+  # should point at — must match 04_create_uc_functions.py and
+  # 07_create_vector_search_index.py.
+  - name: MCP_CATALOG
+    value: "bootcamp_students"
+  - name: MCP_SCHEMA
+    value: "madgula_sirisha_capstone"
