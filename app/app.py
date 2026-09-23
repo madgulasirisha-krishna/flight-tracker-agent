@@ -1,100 +1,132 @@
 """
-Flight Tracker & Trip-Watch Agent — Databricks App skeleton.
+Flight Tracker & Trip-Watch Agent — main chat interface.
 
-Purpose: prove out deployment + connectivity (Lakebase, Databricks SQL)
-using ambient app-identity authentication before any real frontend logic
-is built. Once this shows both connections green, replace the body of
-main() with the actual chat panel / dashboard.
-
-Both Lakebase and the SQL Warehouse must be added as App resources in
-the Databricks Apps UI before this will connect successfully — that step
-is what creates the app's service principal and grants it access.
+Now backed by the LangGraph agent (langgraph_agent.py), which binds
+custom Lakebase tools together with two Databricks-managed MCP servers
+(UC Functions, AI Search) — replacing the earlier hand-rolled tool loop
+in agent_loop.py.
 """
 
-import os
+import asyncio
 import streamlit as st
-import psycopg2
-from databricks import sql as databricks_sql
-from databricks.sdk import WorkspaceClient
 
-st.set_page_config(page_title="Flight Tracker — Connectivity Check", page_icon="✈️")
+import lakebase_crud as db
+from langgraph_agent import build_agent, run_agent_turn, get_latest_text_reply
+from dashboard import render_dashboard
 
-workspace_client = WorkspaceClient()
+st.set_page_config(page_title="Flight Tracker Agent", page_icon="✈️")
+st.title("✈️ Flight Tracker & Trip-Watch Agent")
+st.caption(
+    "Watch flights, get alerts, manage trips, and ask about your passenger rights."
+)
 
+# ============================================================
+# User identification
+# ============================================================
 
-def check_lakebase() -> tuple[bool, str]:
-    """Attempts a simple SELECT 1 against Lakebase using a freshly
-    generated OAuth database credential for this app's own service
-    principal identity — no manually managed secret required."""
-    try:
-        endpoint_name = os.environ["LAKEBASE_ENDPOINT_NAME"]  # e.g. projects/.../branches/.../endpoints/...
-        credential = workspace_client.postgres.generate_database_credential(endpoint=endpoint_name)
+with st.sidebar:
+    st.subheader("Session")
+    email = st.text_input("Your email", value=st.session_state.get("email", "demo@example.com"))
 
-        conn = psycopg2.connect(
-            host=os.environ["PGHOST"],
-            port=os.environ.get("PGPORT", "5432"),
-            dbname=os.environ.get("PGDATABASE", "databricks_postgres"),
-            user=os.environ["PGUSER"],  # the app's service principal client ID
-            password=credential.token,
-            sslmode="require",
-            connect_timeout=10,
-        )
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1;")
-            cur.fetchone()
-        conn.close()
-        return True, "Connected — SELECT 1 succeeded."
-    except Exception as e:
-        return False, f"Failed: {e}"
+    if email != st.session_state.get("email"):
+        st.session_state.email = email
+        st.session_state.user = db.get_or_create_user(email)
+        st.session_state.messages = []
+        st.session_state.agent = None  # force rebuild for the new user_id
 
+    if "user" not in st.session_state:
+        st.session_state.user = db.get_or_create_user(email)
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+    if "agent" not in st.session_state:
+        st.session_state.agent = None
 
-def check_databricks_sql() -> tuple[bool, str]:
-    """Attempts a simple SELECT 1 against a Databricks SQL warehouse
-    using the app's own ambient OAuth identity — no token to manage.
-    Fetching a fresh token per call (rather than caching it) means this
-    naturally handles the hourly expiry without extra refresh logic."""
-    try:
-        token = workspace_client.config.oauth_token().access_token
-        http_path = f"/sql/1.0/warehouses/{os.environ['DATABRICKS_WAREHOUSE_ID']}"
+    user_id = st.session_state.user["user_id"]
+    st.caption(f"user_id: `{user_id}`")
 
-        with databricks_sql.connect(
-            server_hostname=os.environ["DATABRICKS_HOST"].replace("https://", ""),
-            http_path=http_path,
-            access_token=token,
-        ) as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT 1;")
-                cur.fetchall()
-        return True, "Connected — SELECT 1 succeeded."
-    except Exception as e:
-        return False, f"Failed: {e}"
+    if st.button("Clear conversation"):
+        st.session_state.messages = []
+        st.rerun()
 
+    with st.expander("Connection status (debug)"):
+        try:
+            with db.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1;")
+                    cur.fetchone()
+            st.success("Lakebase: connected")
+        except Exception as e:
+            st.error(f"Lakebase: {e}")
 
-def main():
-    st.title("✈️ Flight Tracker — Connectivity Check")
-    st.caption(
-        "Skeleton deployment on Databricks Apps. Once Lakebase and Databricks "
-        "SQL both show green below, this file gets replaced with the real "
-        "chat + dashboard UI."
-    )
+        if st.session_state.agent is not None:
+            st.success("Agent + MCP tools: loaded")
+        else:
+            st.info("Agent + MCP tools: not loaded yet (loads on first message)")
 
-    st.subheader("Lakebase")
-    lakebase_ok, lakebase_msg = check_lakebase()
-    (st.success if lakebase_ok else st.error)(lakebase_msg)
+# ============================================================
+# Build the agent once per session (loading MCP tools is a network
+# round-trip — don't redo it on every message)
+# ============================================================
 
-    st.subheader("Databricks SQL Warehouse")
-    dbx_ok, dbx_msg = check_databricks_sql()
-    (st.success if dbx_ok else st.error)(dbx_msg)
+def get_or_build_agent():
+    if st.session_state.agent is None:
+        st.session_state.agent = asyncio.run(build_agent(user_id))
+    return st.session_state.agent
 
-    st.divider()
-    st.caption(
-        "Auth is handled automatically via this app's service principal. "
-        "LAKEBASE_ENDPOINT_NAME and DATABRICKS_WAREHOUSE_ID are auto-set in "
-        "app.yaml via valueFrom, resolving your 'database' and "
-        "'sql-warehouse' app resources."
-    )
+# ============================================================
+# Tabs: Chat (primary) and Insights (analytics dashboard)
+# ============================================================
 
+tab_chat, tab_insights = st.tabs(["💬 Chat", "📊 Insights"])
 
-if __name__ == "__main__":
-    main()
+with tab_chat:
+    def _extract_role_and_text(message) -> tuple[str, str]:
+        """Handles both plain dicts (the first user turn, appended directly
+        in this file) and LangChain message objects (everything returned by
+        the agent — HumanMessage, AIMessage, ToolMessage — which don't
+        support dict-style .get())."""
+        if isinstance(message, dict):
+            role = message.get("role", "")
+            content = message.get("content", "")
+        else:
+            role = {"human": "user", "ai": "assistant"}.get(getattr(message, "type", ""), "")
+            content = getattr(message, "content", "")
 
+        if isinstance(content, str):
+            return role, content
+        if isinstance(content, list):
+            text = "".join(
+                b.get("text", "") for b in content
+                if isinstance(b, dict) and b.get("type") == "text"
+            )
+            return role, text
+        return role, ""
+
+    for message in st.session_state.messages:
+        role, text = _extract_role_and_text(message)
+        # Only render user/assistant turns — skip tool calls/results so the
+        # chat doesn't show internal tool chatter as separate bubbles.
+        if role in ("user", "assistant") and text:
+            with st.chat_message(role):
+                st.markdown(text)
+
+    if prompt := st.chat_input("Try: 'Watch flight UAL123 on 2026-10-01' or 'What if my flight is cancelled?'"):
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        st.session_state.messages.append({"role": "user", "content": prompt})
+
+        with st.chat_message("assistant"):
+            with st.spinner("Thinking..."):
+                try:
+                    agent = get_or_build_agent()
+                    st.session_state.messages = asyncio.run(
+                        run_agent_turn(agent, st.session_state.messages)
+                    )
+                    reply = get_latest_text_reply(st.session_state.messages)
+                except Exception as e:
+                    reply = f"Something went wrong: {e}"
+            st.markdown(reply)
+
+with tab_insights:
+    render_dashboard()
