@@ -239,6 +239,39 @@ def cancel_alert(alert_id: str) -> dict:
 
 
 # ============================================================
+# alerts (read)
+# ============================================================
+ 
+def list_alerts(user_id: str | None = None, status: str | None = None) -> list[dict]:
+    """Lists alerts, joined with watched_flights (for flight context) and
+    users (for email). user_id=None lists across all users — used by the
+    dashboard for an app-wide view; a specific user_id scopes it to one
+    person — used by the list_my_alerts tool. status=None returns every
+    status; pass 'triggered' or 'active' to filter."""
+    query = """
+        SELECT a.alert_id, a.alert_type, a.threshold_minutes, a.status,
+               a.triggered_at, a.created_at,
+               wf.flight_number, wf.flight_date, u.email
+        FROM alerts a
+        JOIN watched_flights wf ON wf.watch_id = a.watch_id
+        JOIN users u ON u.user_id = wf.user_id
+        WHERE 1=1
+    """
+    params = []
+    if user_id:
+        query += " AND wf.user_id = %s"
+        params.append(user_id)
+    if status:
+        query += " AND a.status = %s"
+        params.append(status)
+    query += " ORDER BY a.created_at DESC;"
+ 
+    with get_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(query, tuple(params))
+            return _fetch_all(cur)
+
+# ============================================================
 # agent_action_log
 # ============================================================
 

@@ -59,14 +59,23 @@ MODEL_ENDPOINT = os.environ.get("LLM_MODEL_NAME", "databricks-claude-sonnet-4-6"
 SYSTEM_PROMPT = """You are the Flight Tracker & Trip-Watch assistant. You help \
 users watch flights, manage alerts, organize trips, check flight status and \
 historical delay stats, and answer passenger-rights questions.
-
+ 
 Your tools come from two places:
 - App tools (watching flights, alerts, trips) act directly on the user's data.
 - Databricks-managed tools look up historical delay stats, live flight status, \
 and passenger-rights documents (DOT guidance, airline Contracts of Carriage).
-
+ 
 Rules:
 - Always use a tool to look up or change real data rather than guessing.
+- Neither your live status data nor your historical stats give you a
+  computed delay for a specific flight — adsb.lol has no schedule data,
+  and BTS stats are historical route/carrier averages, not this flight's
+  schedule. When asked if a flight is delayed, call both
+  get_flight_status (current position: on_ground/in_air) and
+  get_historical_delay_stats (the route/carrier's typical performance),
+  present both, and be explicit that you can't state an actual delay
+  for this specific flight — only its current physical state and how
+  that route/carrier usually performs.
 - For passenger-rights questions, use the document search tool and cite the \
 source document/section in your answer.
 - Confirm the details of any write action (e.g. which flight, which alert) back \
@@ -156,10 +165,17 @@ def build_lakebase_tools(user_id: str) -> list:
     def get_trip_summary(trip_id: str) -> dict:
         """Get all flights grouped under a specific trip."""
         return agent_tools.get_trip_summary(user_id=user_id, trip_id=trip_id)
+    
+    @tool
+    def list_my_alerts() -> dict:
+        """List all alerts for the current user, including their status
+        (active/triggered/cancelled) and which flight each is attached to."""
+        return agent_tools.list_my_alerts(user_id=user_id)
 
     return [
         add_flight_watch, remove_flight_watch, create_trip,
         set_alert, cancel_alert, list_my_watched_flights, get_trip_summary,
+        list_my_alerts,
     ]
 
 

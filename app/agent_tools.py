@@ -112,6 +112,22 @@ def get_trip_summary(user_id: str, trip_id: str) -> dict:
     return {"trip_id": trip["trip_id"], "trip_name": trip["trip_name"],
             "flights": [{"flight_number": f["flight_number"], "flight_date": str(f["flight_date"]),
                          "status": f["status"]} for f in trip["flights"]]}
+    
+
+@logged_tool("list_my_alerts")
+def list_my_alerts(user_id: str) -> dict:
+    alerts = db.list_alerts(user_id=user_id)
+    return {"count": len(alerts), "alerts": [
+        {
+            "alert_id": a["alert_id"],
+            "flight_number": a["flight_number"],
+            "flight_date": str(a["flight_date"]),
+            "alert_type": a["alert_type"],
+            "status": a["status"],
+            "triggered_at": str(a["triggered_at"]) if a["triggered_at"] else None,
+        }
+        for a in alerts
+    ]}
 
 
 # ============================================================
@@ -206,6 +222,11 @@ TOOL_SCHEMAS = [
             "required": ["trip_id"],
         },
     },
+    {
+        "name": "list_my_alerts",
+        "description": "List all alerts for the current user, including their status (active/triggered/cancelled).",
+        "input_schema": {"type": "object", "properties": {}},
+    },
 ]
 
 
@@ -221,6 +242,7 @@ _TOOL_FUNCTIONS = {
     "cancel_alert": cancel_alert,
     "list_my_watched_flights": list_my_watched_flights,
     "get_trip_summary": get_trip_summary,
+    "list_my_alerts": list_my_alerts,
 }
 
 
