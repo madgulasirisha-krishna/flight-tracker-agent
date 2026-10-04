@@ -47,12 +47,12 @@ import agent_tools
 import lakebase_crud as db
 
 # langchain.mcp is beta; the warning is expected and not actionable here.
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore")
-    from langchain.mcp import MCPAdapter
+# with warnings.catch_warnings():
+#     warnings.simplefilter("ignore")
+#     from langchain.mcp import MCPAdapter
 
-from fastmcp.client import Client as FastMCPClient
-from fastmcp.client.transports import StreamableHttpTransport
+# from fastmcp.client import Client as FastMCPClient
+# from fastmcp.client.transports import StreamableHttpTransport
 
 MODEL_ENDPOINT = os.environ.get("LLM_MODEL_NAME", "databricks-claude-sonnet-4-6")
 
@@ -90,16 +90,38 @@ def _get_workspace_host_and_token() -> tuple[str, str]:
     return host, token
 
 
+# async def _load_tools_from_server(url: str, token: str) -> list:
+#     """Loads tools from one managed MCP server. Tools returned by
+#     list_tools() manage their own MCP session per call internally, so
+#     they remain usable after this function returns (the `async with`
+#     block only needs to be open for the listing call itself)."""
+#     transport = StreamableHttpTransport(url, headers={"Authorization": f"Bearer {token}"})
+#     fastmcp_client = FastMCPClient(transport)
+#     async with MCPAdapter(fastmcp_client) as adapter:
+#         return await adapter.list_tools()
+
+
 async def _load_tools_from_server(url: str, token: str) -> list:
     """Loads tools from one managed MCP server. Tools returned by
     list_tools() manage their own MCP session per call internally, so
     they remain usable after this function returns (the `async with`
-    block only needs to be open for the listing call itself)."""
+    block only needs to be open for the listing call itself).
+ 
+    Imports are lazy (inside this function, not at module level) so that
+    other functions in this module remain usable even if the mcp/fastmcp
+    dependency chain is broken in the current environment — only this
+    function, and load_mcp_tools() which calls it, actually require MCP
+    to work."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # langchain.mcp is beta; expected warning
+        from langchain.mcp import MCPAdapter
+    from fastmcp.client import Client as FastMCPClient
+    from fastmcp.client.transports import StreamableHttpTransport
+ 
     transport = StreamableHttpTransport(url, headers={"Authorization": f"Bearer {token}"})
     fastmcp_client = FastMCPClient(transport)
     async with MCPAdapter(fastmcp_client) as adapter:
         return await adapter.list_tools()
-
 
 async def load_mcp_tools() -> list:
     """Fetches the current tool list from both managed MCP servers. Call

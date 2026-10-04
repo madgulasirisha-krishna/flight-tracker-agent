@@ -29,7 +29,7 @@
 dbutils.widgets.text("catalog", "")
 dbutils.widgets.text("schema", "")
 dbutils.widgets.text("landing_table", "adsb_lol_flight_landing")
-dbutils.widgets.text("poll_interval_seconds", "25")
+dbutils.widgets.text("poll_interval_seconds", "10")
 
 catalog = dbutils.widgets.get("catalog")
 schema = dbutils.widgets.get("schema")
